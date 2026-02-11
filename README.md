@@ -8,6 +8,7 @@ A plugin that connects OpenClaw to Open WebUI Channels. Enables OpenClaw to act 
 - 💬 **Bidirectional Messaging**: Supports both sending from OpenClaw and receiving from channels
 - 📎 **Media Support**: Upload and download files and media
 - 🧵 **Thread Support**: Handle threads and replies
+- 👍 **Reactions**: Add and remove reactions on messages
 - ⌨️ **Typing Indicator**: Display when OpenClaw is composing a reply
 
 ## Requirements

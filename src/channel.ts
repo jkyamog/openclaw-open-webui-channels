@@ -312,9 +312,55 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
     },
   },
   actions: {
-    supportsAction: ({ action }) => action === "send",
+    supportsAction: ({ action }) => action === "send" || action === "react",
     handleAction: async (ctx) => {
       const params = ctx.params as Record<string, unknown>;
+      const action = (params.action as string | undefined) ?? "send";
+
+      // --- React action ---
+      if (action === "react") {
+        const emoji = (params.emoji as string | undefined) ?? "";
+        const messageId = (params.messageId as string | undefined) ?? "";
+        const remove = params.remove === true;
+
+        const account = resolveOpenWebUIAccount(ctx.cfg);
+        const apiAccount = getAccountFromResolved(account);
+
+        // Resolve the Open WebUI channel UUID from channelId, target, or to.
+        // The OpenClaw core resolves channelId via resolveActionTarget before
+        // calling handleAction, stripping any "open-webui:" prefix.
+        const channelId = ((params.channelId as string) ?? (params.target as string) ?? (params.to as string) ?? "").replace(/^open-webui:/i, "").trim();
+
+        if (!emoji) {
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "Emoji is required" }) }], details: { ok: false } } as any;
+        }
+        if (!messageId) {
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "messageId is required" }) }], details: { ok: false } } as any;
+        }
+        if (!channelId) {
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "channel/target is required" }) }], details: { ok: false } } as any;
+        }
+
+        try {
+          if (remove) {
+            const success = await removeReaction(apiAccount, channelId, messageId, emoji);
+            if (!success) {
+              return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "Failed to remove reaction (API returned non-ok)" }) }], details: { ok: false } } as any;
+            }
+            return { content: [{ type: "text", text: JSON.stringify({ ok: true, removed: emoji }) }], details: { ok: true, removed: emoji } } as any;
+          } else {
+            const success = await addReaction(apiAccount, channelId, messageId, emoji);
+            if (!success) {
+              return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: "Failed to add reaction (API returned non-ok)" }) }], details: { ok: false } } as any;
+            }
+            return { content: [{ type: "text", text: JSON.stringify({ ok: true, added: emoji }) }], details: { ok: true, added: emoji } } as any;
+          }
+        } catch (err) {
+          return { content: [{ type: "text", text: JSON.stringify({ ok: false, error: String(err) }) }], details: { ok: false, error: String(err) } } as any;
+        }
+      }
+
+      // --- Send action ---
       const to = (params.target as string) ?? (params.to as string);
       const message = (params.message as string) ?? "";
       const mediaUrl = (params.filePath as string) ?? (params.mediaUrl as string) ?? (params.media as string);
