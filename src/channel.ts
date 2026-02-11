@@ -788,6 +788,23 @@ async function handleChannelEvent(
     },
   });
 
+  // Fetch thread parent context so the agent knows what this thread is about
+  let threadParentContext = "";
+  if (parentId) {
+    try {
+      const parentMsg = await getMessageById(apiAccount, channelId, parentId);
+      if (parentMsg) {
+        const parentUser = parentMsg.user?.name ?? parentMsg.user_id;
+        const parentContent = parentMsg.content?.trim() ?? "";
+        if (parentContent) {
+          threadParentContext = `[Thread started from this message by ${parentUser}]\n${parentContent}\n[End of thread parent message]\n\n`;
+        }
+      }
+    } catch (err) {
+      log?.warn(`[${account.accountId}] failed to fetch thread parent context: ${String(err)}`);
+    }
+  }
+
   // Fetch reply context if the incoming message is a reply
   let replyContext = "";
   const incomingReplyToId = message.reply_to_id;
@@ -798,7 +815,7 @@ async function handleChannelEvent(
         const repliedUser = repliedMsg.user?.name ?? repliedMsg.user_id;
         const repliedContent = repliedMsg.content?.trim() ?? "";
         if (repliedContent) {
-          replyContext = `[Replied message - for context]\n[Open WebUI ${repliedUser}] ${repliedContent}\n\n`;
+          replyContext = `[Replied message by ${repliedUser}]\n${repliedContent}\n[End of replied message]\n\n`;
         }
       }
     } catch (err) {
@@ -813,7 +830,8 @@ async function handleChannelEvent(
   const channelName = rawChannelName.replace(/[\[\]\n\r]/g, "").slice(0, 100);
   const fromLabel = `Open WebUI #${channelName} channel id:${channelId}`;
   const body = text;
-  const bodyForAgent = replyContext ? `${replyContext}${text}` : text;
+  const contextPrefix = `${threadParentContext}${replyContext}`;
+  const bodyForAgent = contextPrefix ? `${contextPrefix}${text}` : text;
 
   const ctxPayload = {
     Body: body,
