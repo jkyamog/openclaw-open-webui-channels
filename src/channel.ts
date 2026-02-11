@@ -776,13 +776,15 @@ async function handleChannelEvent(
   );
 
   // Resolve the route for this message
+  // Use parentId to separate thread sessions from channel sessions,
+  // similar to how Discord uses thread IDs for session isolation.
   const route = core.channel.routing.resolveAgentRoute({
     cfg: config,
     channel: "open-webui",
     accountId: account.accountId,
     peer: {
       kind: "group",
-      id: channelId,
+      id: parentId ? `${channelId}:${parentId}` : channelId,
     },
   });
 
