@@ -22,12 +22,9 @@ const meta = {
   id: "open-webui",
   label: "Open WebUI",
   selectionLabel: "Open WebUI (Channels)",
-  detailLabel: "Open WebUI Channels",
-  docsPath: "/channels/open-webui",
-  docsLabel: "open-webui",
+  docsPath: "https://github.com/skyzi000/openclaw-open-webui-channels#readme",
+  docsLabel: "GitHub README",
   blurb: "Open WebUI channels integration via REST API and Socket.IO.",
-  aliases: ["owui", "webui"],
-  order: 100,
 };
 
 // Config schema for Open WebUI
