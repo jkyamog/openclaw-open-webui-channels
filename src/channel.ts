@@ -22,12 +22,9 @@ const meta = {
   id: "open-webui",
   label: "Open WebUI",
   selectionLabel: "Open WebUI (Channels)",
-  detailLabel: "Open WebUI Channels",
-  docsPath: "/channels/open-webui",
-  docsLabel: "open-webui",
+  docsPath: "https://github.com/skyzi000/openclaw-open-webui-channels#readme",
+  docsLabel: "GitHub README",
   blurb: "Open WebUI channels integration via REST API and Socket.IO.",
-  aliases: ["owui", "webui"],
-  order: 100,
 };
 
 // Config schema for Open WebUI
@@ -364,7 +361,6 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
       const to = (params.target as string) ?? (params.to as string);
       const message = (params.message as string) ?? "";
       const mediaUrl = (params.filePath as string) ?? (params.mediaUrl as string) ?? (params.media as string);
-      const threadId = (params.threadId as string) ?? ctx.toolContext?.currentThreadTs;
       const replyTo = params.replyTo as string | undefined;
 
       if (!to) {
@@ -394,9 +390,12 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
           dataPayload.files = uploadedFiles;
         }
 
+        // Never set parentId in handleAction — Open WebUI hides messages with
+        // a parent_id that doesn't exist in the target channel, and there is
+        // no safe way for the agent to know the correct parent_id for a
+        // different channel. Use replyTo (reply_to_id) for replies instead.
         const posted = await postMessage(apiAccount, normalized, content || " ", {
           replyToId: replyTo,
-          parentId: threadId ? String(threadId) : undefined,
           data: dataPayload,
         });
 
@@ -506,10 +505,11 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
       return { ok: true, to: normalized };
     },
     sendText: async ({ to, text, replyToId, threadId, accountId, cfg }) => {
+      const normalizedTo = to.replace(/^open-webui:/i, "");
       const account = resolveOpenWebUIAccount(cfg, accountId);
       const apiAccount = getAccountFromResolved(account);
       try {
-        const message = await postMessage(apiAccount, to, text, {
+        const message = await postMessage(apiAccount, normalizedTo, text, {
           replyToId: replyToId ?? undefined,
           parentId: threadId ? String(threadId) : undefined,
         });
@@ -527,6 +527,7 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
       }
     },
     sendMedia: async ({ to, text, mediaUrl, replyToId, threadId, accountId, cfg }) => {
+      const normalizedTo = to.replace(/^open-webui:/i, "");
       const account = resolveOpenWebUIAccount(cfg, accountId);
       const apiAccount = getAccountFromResolved(account);
       try {
@@ -542,7 +543,7 @@ export const openWebUIPlugin: ChannelPlugin<ResolvedOpenWebUIAccount> = {
           dataPayload.files = uploadedFiles.map(wrapUploadedFile);
         }
 
-        const message = await postMessage(apiAccount, to, content, {
+        const message = await postMessage(apiAccount, normalizedTo, content, {
           replyToId: replyToId ?? undefined,
           parentId: threadId ? String(threadId) : undefined,
           data: dataPayload,
@@ -885,12 +886,14 @@ async function handleChannelEvent(
       (ctxPayload as Record<string, unknown>)[`MediaUrl${index}`] = item.path;
     });
   }
+  const finalizedCtx = core.channel.reply.finalizeInboundContext(ctxPayload);
 
   // Dispatch to agent
   const textLimit = account.config.textChunkLimit ?? 4000;
 
   // Send typing indicator immediately and refresh every 4s (Open WebUI expires after 5s)
   const typingMessageId = parentId ?? null;
+  let typingInterval: ReturnType<typeof setInterval> | null = null;
   const emitTyping = (typing: boolean) => {
     const conn = getConnection(apiAccount);
     if (conn?.socket?.connected) {
@@ -901,15 +904,24 @@ async function handleChannelEvent(
       });
     }
   };
-  emitTyping(true);
-  const typingInterval = setInterval(() => emitTyping(true), 4000);
+  const startTyping = async () => {
+    emitTyping(true);
+    if (!typingInterval) {
+      typingInterval = setInterval(() => emitTyping(true), 4000);
+    }
+  };
+  const stopTyping = async () => {
+    if (typingInterval) {
+      clearInterval(typingInterval);
+      typingInterval = null;
+    }
+    emitTyping(false);
+  };
 
-  try {
-    await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-      ctx: ctxPayload,
-      cfg: config,
-      dispatcherOptions: {
-        deliver: async (payload) => {
+  const { dispatcher, replyOptions, markDispatchIdle } =
+    core.channel.reply.createReplyDispatcherWithTyping({
+      deliver: async (payload) => {
+        try {
           const payloadRecord = payload as Record<string, unknown>;
           const reaction = extractReactionPayload(payloadRecord);
           if (reaction) {
@@ -927,16 +939,24 @@ async function handleChannelEvent(
           const mediaSpecs = coerceOutboundMedia(payloadRecord);
           const uploadedFiles: OpenWebUIFile[] = [];
           for (const media of mediaSpecs) {
-            const uploaded = await uploadFile(apiAccount, media.path, {
-              filename: media.filename,
-              mimeType: media.mimeType,
-            });
-            uploadedFiles.push(uploaded);
+            try {
+              const uploaded = await uploadFile(apiAccount, media.path, {
+                filename: media.filename,
+                mimeType: media.mimeType,
+              });
+              uploadedFiles.push(uploaded);
+            } catch (uploadErr) {
+              log?.error(`[${account.accountId}] deliver: failed to upload file ${media.path}: ${String(uploadErr)}`);
+            }
           }
 
           const responseText = payloadRecord.text as string | undefined;
           const trimmed = responseText?.trim() ?? "";
           if (!trimmed && uploadedFiles.length === 0) {
+            if (mediaSpecs.length > 0) {
+              throw new Error(`All ${mediaSpecs.length} media upload(s) failed and no text content to deliver`);
+            }
+            log?.debug?.(`[${account.accountId}] deliver: skipping empty payload`);
             return;
           }
 
@@ -963,47 +983,52 @@ async function handleChannelEvent(
             dataPayloadWithFiles.files = uploadedFiles.map(wrapUploadedFile);
           }
 
+          log?.info(`[${account.accountId}] deliver: posting ${chunks.length} chunk(s) (${trimmed.length} chars) to ${outboundTarget} (replyTo=${replyToOverride ?? "none"}, parent=${parentOverride ?? "none"})`);
+
           for (const [index, chunk] of chunks.entries()) {
             const content = chunk === "" ? " " : chunk;
             const dataPayload = index === 0 ? dataPayloadWithFiles : dataOverride;
-            await postMessage(apiAccount, outboundTarget, content, {
-              replyToId: replyToOverride,
-              parentId: parentOverride,
-              data: dataPayload,
-              meta: metaOverride,
-            });
+            try {
+              const posted = await postMessage(apiAccount, outboundTarget, content, {
+                replyToId: replyToOverride,
+                parentId: parentOverride,
+                data: dataPayload,
+                meta: metaOverride,
+              });
+              if (posted?.id) {
+                log?.info(`[${account.accountId}] deliver: chunk ${index + 1}/${chunks.length} saved as ${posted.id} (${content.length}ch)`);
+              } else {
+                log?.error(`[${account.accountId}] deliver: chunk ${index + 1}/${chunks.length} returned no id! response=${JSON.stringify(posted).slice(0, 300)}`);
+              }
+            } catch (postErr) {
+              log?.error(`[${account.accountId}] deliver: failed to post chunk ${index + 1}/${chunks.length} to ${outboundTarget}: ${String(postErr)}`);
+              throw postErr; // Re-throw to let core handle the failure
+            }
           }
-          // Typing is cleared in the finally block via emitTyping(false)
-        },
-        deliverReaction: async (payload) => {
-          const payloadRecord = payload as Record<string, unknown>;
-          const reaction = extractReactionPayload(payloadRecord);
-          if (!reaction) {
-            return;
-          }
-          const targetMessageId =
-            reaction.messageId ??
-            (payloadRecord.replyToId as string | undefined) ??
-            (payloadRecord.reply_to_id as string | undefined) ??
-            replyToId ??
-            message.id;
-          if (!targetMessageId) {
-            return;
-          }
-          if (reaction.action === "remove") {
-            await removeReaction(apiAccount, outboundTarget, targetMessageId, reaction.emoji);
-          } else {
-            await addReaction(apiAccount, outboundTarget, targetMessageId, reaction.emoji);
-          }
-        },
-        // onReplyStart not needed - typing is emitted on message receive
-        // and cleared in finally block after dispatch completes
+          log?.info(`[${account.accountId}] deliver: successfully posted to ${outboundTarget}`);
+        } catch (deliverErr) {
+          log?.error(`[${account.accountId}] deliver: unexpected error: ${String(deliverErr)}`);
+          throw deliverErr; // Re-throw so core knows delivery failed
+        }
       },
+      onReplyStart: startTyping,
+      onError: (err: unknown, info: { kind: string }) => {
+        log?.error(`[${account.accountId}] dispatch error (${info.kind}): ${String(err)}`);
+      },
+    });
+
+  try {
+    await startTyping();
+    await core.channel.reply.dispatchReplyFromConfig({
+      ctx: finalizedCtx,
+      cfg: config,
+      dispatcher,
+      replyOptions,
     });
   } catch (err) {
     log?.error(`[${account.accountId}] failed to dispatch message: ${String(err)}`);
   } finally {
-    clearInterval(typingInterval);
-    emitTyping(false);
+    markDispatchIdle();
+    await stopTyping();
   }
 }

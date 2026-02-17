@@ -1,5 +1,7 @@
 # OpenClaw Open WebUI Channels Plugin
 
+[🇯🇵 日本語版はこちら](README.ja.md)
+
 A plugin that connects OpenClaw to Open WebUI Channels. Enables OpenClaw to act as a user within Open WebUI and engage in bidirectional communication in channels.
 
 ## Features
@@ -10,6 +12,7 @@ A plugin that connects OpenClaw to Open WebUI Channels. Enables OpenClaw to act 
 - 🧵 **Thread Support**: Handle threads and replies
 - 👍 **Reactions**: Add and remove reactions on messages
 - ⌨️ **Typing Indicator**: Display when OpenClaw is composing a reply
+- 📊 **Rich Rendering**: Take advantage of Open WebUI's excellent Markdown support — tables, syntax-highlighted code blocks, LaTeX math, and more render beautifully compared to platforms like Discord
 
 ## Requirements
 

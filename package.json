@@ -1,12 +1,15 @@
 {
-  "name": "@skyzi000/openclaw-open-webui-channels",
-  "version": "0.4.0",
+  "name": "@skyzi000/open-webui",
+  "version": "0.4.2",
   "description": "OpenClaw plugin to connect with Open WebUI Channels. Enables bidirectional communication with Open WebUI channels, making OpenClaw act as a user within Open WebUI.",
   "type": "module",
   "main": "index.ts",
   "keywords": ["openclaw", "open-webui", "channels", "plugin", "chat"],
   "author": "Skyzi000",
   "license": "MIT",
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/skyzi000/openclaw-open-webui-channels.git"
