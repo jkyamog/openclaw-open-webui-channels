@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2] - 2026-02-18
+
+### Fixed
+
+- Stop leaking implicit `parentId` from thread context in handleAction send — Open WebUI hides messages with a `parent_id` that doesn't exist in the target channel
+- Align package name (`@skyzi000/open-webui`) with plugin id for standard installation
+
 ## [0.4.1] - 2026-02-15
 
 ### Fixed
