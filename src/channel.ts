@@ -929,22 +929,15 @@ async function handleChannelEvent(
   let streamingMessageId: string | null = null;
   let streamingLastUpdate = 0;
   let streamingLastText = "";
-  // Track whether a streaming update is in-flight to avoid overlapping requests
   let streamingUpdateInFlight = false;
+  // Buffer the latest pending text so it's flushed after an in-flight request completes
+  let streamingPendingText: string | null = null;
+  let streamingFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const onPartialReply = async (payload: Record<string, unknown>) => {
-    const text = (payload.text as string | undefined)?.trim();
-    if (!text || text === streamingLastText) return;
-
-    const now = Date.now();
-    if (streamingUpdateInFlight) return;
-    if (streamingMessageId && now - streamingLastUpdate < STREAM_UPDATE_INTERVAL_MS) return;
-
-    streamingLastText = text;
+  const flushStreamingUpdate = async (text: string) => {
     streamingUpdateInFlight = true;
     try {
       if (!streamingMessageId) {
-        // Post the initial streaming message
         const posted = await postMessage(apiAccount, outboundTarget, text, {
           replyToId: replyToId,
           parentId: parentId,
@@ -952,12 +945,10 @@ async function handleChannelEvent(
         if (posted?.id) {
           streamingMessageId = posted.id;
           streamingLastUpdate = Date.now();
-          // Stop typing indicator once we have a live streaming message
           await stopTyping();
           log?.debug?.(`[${account.accountId}] streaming: posted initial message ${posted.id}`);
         }
       } else {
-        // Edit existing message in-place
         await updateMessage(apiAccount, outboundTarget, streamingMessageId, text);
         streamingLastUpdate = Date.now();
       }
@@ -965,7 +956,48 @@ async function handleChannelEvent(
       log?.warn?.(`[${account.accountId}] streaming: update failed: ${String(err)}`);
     } finally {
       streamingUpdateInFlight = false;
+      // After completing, check if there's newer text buffered while we were in-flight
+      const pending = streamingPendingText;
+      if (pending && pending !== streamingLastText) {
+        streamingPendingText = null;
+        streamingLastText = pending;
+        void flushStreamingUpdate(pending);
+      }
     }
+  };
+
+  const onPartialReply = async (payload: Record<string, unknown>) => {
+    const text = (payload.text as string | undefined)?.trim();
+    if (!text || text === streamingLastText) return;
+
+    // If in-flight or throttled, buffer the latest text instead of dropping it
+    if (streamingUpdateInFlight) {
+      streamingPendingText = text;
+      return;
+    }
+    const now = Date.now();
+    const timeSinceLastUpdate = now - streamingLastUpdate;
+    if (streamingMessageId && timeSinceLastUpdate < STREAM_UPDATE_INTERVAL_MS) {
+      streamingPendingText = text;
+      // Schedule a flush for when the throttle window expires
+      if (!streamingFlushTimer) {
+        const delay = STREAM_UPDATE_INTERVAL_MS - timeSinceLastUpdate;
+        streamingFlushTimer = setTimeout(() => {
+          streamingFlushTimer = null;
+          const pending = streamingPendingText;
+          if (pending && pending !== streamingLastText && !streamingUpdateInFlight) {
+            streamingPendingText = null;
+            streamingLastText = pending;
+            void flushStreamingUpdate(pending);
+          }
+        }, delay);
+      }
+      return;
+    }
+
+    streamingPendingText = null;
+    streamingLastText = text;
+    void flushStreamingUpdate(text);
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -1148,6 +1180,10 @@ async function handleChannelEvent(
   } catch (err) {
     log?.error(`[${account.accountId}] failed to dispatch message: ${String(err)}`);
   } finally {
+    if (streamingFlushTimer) {
+      clearTimeout(streamingFlushTimer);
+      streamingFlushTimer = null;
+    }
     markDispatchIdle();
     await stopTyping();
   }
